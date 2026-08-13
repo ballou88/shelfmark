@@ -44,6 +44,13 @@ _WEBDL_POLL_INTERVAL = 2
 # side. This call runs on a download worker thread, so an unbounded wait would
 # retire that worker permanently; failing out lets the normal source cascade run.
 _WEBDL_MAX_WAIT = 900
+# Creating a web download is not a quick "accept the job" call: for a link Torbox
+# has not cached, it fetches from the origin (Anna's Archive especially) before
+# answering. Measured well past the 30s API timeout on a cold link. Timing out
+# here does not cancel the job - Torbox still creates it - so a short timeout
+# both loses the download and orphans a job that keeps burning the account's
+# daily link quota.
+_WEBDL_CREATE_TIMEOUT = 300
 _BOOK_EXTENSIONS = (
     ".aac",
     ".azw",
@@ -322,7 +329,7 @@ class TorboxClient(DownloadClient):
             create_url,
             headers=self._auth_headers(),
             data={"link": url, "name": name},
-            timeout=_API_TIMEOUT,
+            timeout=_WEBDL_CREATE_TIMEOUT,
             verify=get_ssl_verify(create_url),
         )
         data = self._response_data(response)

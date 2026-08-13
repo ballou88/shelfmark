@@ -200,6 +200,35 @@ def test_download_web_url_gives_up_once_the_deadline_passes(monkeypatch):
         client.download_web_url("https://source.example/book.epub", "A Book")
 
 
+def test_create_web_download_allows_torbox_time_to_fetch_the_origin(monkeypatch):
+    """Creating a web download is not a quick job accept - Torbox fetches the origin.
+
+    Observed live: a cold Anna's Archive link blew past the 30s API timeout, and
+    because a client-side timeout does not cancel the job, the download was lost
+    *and* an orphan was left burning the account's 25/day AA link quota.
+    """
+    client = _client(monkeypatch)
+    mock_post = MagicMock(return_value=_response({"success": True, "data": {"id": 42}}))
+    mock_get = MagicMock(
+        side_effect=[
+            _response({"success": True, "data": {"download_state": "completed"}}),
+            _response({"success": True, "data": "https://cdn.example/book"}),
+        ]
+    )
+    monkeypatch.setattr("shelfmark.download.clients.torbox.requests.post", mock_post)
+    monkeypatch.setattr("shelfmark.download.clients.torbox.requests.get", mock_get)
+    monkeypatch.setattr(
+        "shelfmark.download.clients.torbox.download_url", lambda *args, **kwargs: BytesIO(b"x")
+    )
+
+    client.download_web_url("https://annas-archive.gl/md5/abc", "A Book")
+
+    create_timeout = mock_post.call_args_list[0].kwargs["timeout"]
+    assert create_timeout >= 120, (
+        f"createwebdownload timeout {create_timeout}s is too short for a cold origin fetch"
+    )
+
+
 def test_rejection_surfaces_torbox_detail_not_the_http_status(monkeypatch):
     """Torbox pairs a 500 with the real reason; the status alone tells users nothing.
 
