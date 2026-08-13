@@ -373,9 +373,7 @@ def test_download_source_settings_include_torbox_direct_download_toggle():
 
     fields = download_source_settings()
     toggle_field = next(
-        field
-        for field in fields
-        if getattr(field, "key", None) == "TORBOX_DIRECT_DOWNLOAD_ENABLED"
+        field for field in fields if getattr(field, "key", None) == "TORBOX_DIRECT_DOWNLOAD_ENABLED"
     )
 
     assert toggle_field.default is False

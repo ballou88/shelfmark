@@ -576,7 +576,7 @@ def _test_torbox_connection(current_values: dict[str, Any] | None = None) -> dic
         return {"success": False, "message": "Torbox API Key is required"}
 
     client = TorboxClient()
-    client._api_key = api_key
+    client.set_api_key(api_key)
     success, message = client.test_connection()
     return {"success": success, "message": message}
 

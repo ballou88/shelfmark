@@ -1190,9 +1190,29 @@ def _try_torbox_aa_download(
     """
     from shelfmark.download.clients.torbox import TorboxClient
 
-    url = f"{network.get_aa_base_url()}/md5/{book_info.id}"
+    base_url = network.get_aa_base_url()
+    if not base_url:
+        # Without a configured mirror this would build a bare "/md5/<id>" path,
+        # which Torbox rejects as an invalid Anna's Archive link.
+        logger.warning(
+            "Torbox direct downloads are enabled but no Anna's Archive mirror is "
+            "configured; add one under Settings > Direct Download > Mirrors. "
+            "Falling back to the configured sources."
+        )
+        return None
+
+    url = f"{base_url}/md5/{book_info.id}"
     client = TorboxClient()
-    if not client._api_key:
+    if not client.has_api_key():
+        # Silently skipping here makes the toggle look broken. The key lives on
+        # the Download Clients tab, which only reveals it when Torbox is the
+        # selected torrent client, so say where to put it.
+        logger.warning(
+            "Torbox direct downloads are enabled but TORBOX_API_KEY is not set; "
+            "set it under Settings > Download Clients (select Torbox as the torrent "
+            "client to reveal the field) or via the TORBOX_API_KEY environment "
+            "variable. Falling back to the configured sources."
+        )
         return None
 
     try:
@@ -1214,8 +1234,16 @@ def _try_torbox_aa_download(
         data.seek(0)
         with book_path.open("wb") as file:
             file.write(data.getbuffer())
-    except (requests.exceptions.RequestException, RuntimeError, TypeError, ValueError, OSError) as error:
-        logger.warning("Torbox Anna's Archive download failed; trying configured sources: %s", error)
+    except (
+        requests.exceptions.RequestException,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        OSError,
+    ) as error:
+        logger.warning(
+            "Torbox Anna's Archive download failed; trying configured sources: %s", error
+        )
         return None
     else:
         return url
