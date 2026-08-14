@@ -152,6 +152,18 @@ def get_cf_cookies_for_domain(domain: str) -> dict[str, str]:
     return _get_internal_bypasser().get_cf_cookies_for_domain(domain)
 
 
+def clear_cf_cookies(domain: str) -> None:
+    """Drop stored bypass cookies for a domain so the next bypass starts clean.
+
+    DDoS-Guard cookies carry no ``cf_clearance`` expiry, so the store never ages
+    them out on its own; once the origin stops honouring them they have to be
+    discarded explicitly or every retry replays the rejected set.
+    """
+    if _is_using_external_bypasser():
+        return
+    _get_internal_bypasser().clear_cf_cookies(domain)
+
+
 def get_cf_user_agent_for_domain(domain: str) -> str | None:
     """Get CF user agent - only available with internal bypasser."""
     if _is_using_external_bypasser():
@@ -433,6 +445,27 @@ def html_get_page(
 
         except Exception as e:
             status = _get_status_code(e)
+
+            # A redirect loop is a challenge in disguise, not a dead mirror.
+            # Anna's Archive bounces ?check=1 -> ?check=1 when the bypass cookies
+            # we replay are no longer accepted. The resulting TooManyRedirects
+            # carries no HTTP status, so the 403 rescue below cannot see it and
+            # the request would burn every retry before reporting the mirror as
+            # blocked. Drop the rejected cookies and let the bypasser re-solve.
+            if (
+                isinstance(e, requests.exceptions.TooManyRedirects)
+                and allow_bypasser_fallback
+                and _is_cf_bypass_enabled()
+                and not use_bypasser_now
+            ):
+                stale_host = urlparse(current_url).hostname or ""
+                if stale_host:
+                    clear_cf_cookies(stale_host)
+                logger.info("Redirect loop detected; switching to bypasser: %s", current_url)
+                if status_callback:
+                    status_callback("resolving", "Bypassing protection...")
+                use_bypasser_now = True
+                continue
 
             # 403 = Cloudflare/DDoS-Guard protection
             if status == _HTTP_STATUS_FORBIDDEN:

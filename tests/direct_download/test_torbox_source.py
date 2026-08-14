@@ -106,3 +106,28 @@ def test_rejects_a_too_small_payload(monkeypatch, tmp_path):
 
     assert dd._try_torbox_aa_download(_book(), book_path, None, None, None) is None
     assert not book_path.exists() or Path(book_path).stat().st_size == 0
+
+
+def test_search_allows_the_bypasser_to_solve_challenge_pages(monkeypatch):
+    """Anna's Archive gates /search behind DDoS-Guard; parsing the challenge is useless.
+
+    Without this the search reports "mirrors are blocked" even though the
+    configured bypasser can solve the challenge. See calibrain/shelfmark#1202.
+    """
+    from shelfmark.release_sources.direct_download import SearchFilters, search_books
+
+    monkeypatch.setattr(dd.network, "get_aa_base_url", lambda: "https://mirror.example")
+    monkeypatch.setattr(dd.network, "AAMirrorSelector", lambda: object())
+    captured: dict[str, object] = {}
+
+    def _fake_html_get_page(url, selector=None, allow_bypasser_fallback=False, **kwargs):
+        del selector, kwargs
+        captured["url"] = url
+        captured["allow_bypasser_fallback"] = allow_bypasser_fallback
+        return "<table></table>"
+
+    monkeypatch.setattr(dd.downloader, "html_get_page", _fake_html_get_page)
+
+    search_books("dune", SearchFilters())
+
+    assert captured["allow_bypasser_fallback"] is True

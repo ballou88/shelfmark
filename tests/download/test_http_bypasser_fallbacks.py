@@ -183,3 +183,62 @@ def test_get_bypassed_page_uses_external_bypasser_when_enabled(monkeypatch):
 
     assert http.get_bypassed_page("https://example.com", selector, cancel_flag) == "EXT"
     assert calls == [("https://example.com", selector, cancel_flag)]
+
+
+def test_redirect_loop_routes_to_bypasser_and_purges_stale_cookies(monkeypatch):
+    """A DDoS-Guard redirect loop is a challenge, not a dead mirror.
+
+    Stale bypass cookies make Anna's Archive bounce ?check=1 -> ?check=1 until
+    requests raises TooManyRedirects. That exception carries no HTTP status, so
+    a rescue gated purely on 403 never fires: the request burns every retry and
+    surfaces as "mirrors are blocked". See calibrain/shelfmark#1204.
+    """
+    import shelfmark.download.http as http
+
+    monkeypatch.setattr(http, "_is_cf_bypass_enabled", lambda: True)
+    monkeypatch.setattr(http, "_bypass_grace_seconds", lambda: 1.0)
+    monkeypatch.setattr(http, "_apply_cf_bypass", lambda _url, _headers: {"__ddg1_": "stale"})
+
+    cleared: list[str] = []
+    monkeypatch.setattr(http, "clear_cf_cookies", cleared.append)
+    monkeypatch.setattr(http, "get_bypassed_page", lambda *_a, **_kw: "RESULTS")
+
+    def looping_get(*_args, **_kwargs):
+        raise requests.exceptions.TooManyRedirects("Too many redirects")
+
+    monkeypatch.setattr(http.requests, "get", looping_get)
+
+    html = http.html_get_page(
+        "https://annas-archive.gl/search?q=dune",
+        retry=3,
+        allow_bypasser_fallback=True,
+    )
+
+    assert html == "RESULTS"
+    assert "annas-archive.gl" in cleared, "stale cookies must be purged before re-bypassing"
+
+
+def test_redirect_loop_without_bypasser_fallback_does_not_purge(monkeypatch):
+    """Callers that opted out of the bypasser keep the existing behaviour."""
+    import shelfmark.download.http as http
+
+    monkeypatch.setattr(http, "_is_cf_bypass_enabled", lambda: True)
+    monkeypatch.setattr(http, "_apply_cf_bypass", lambda _url, _headers: {})
+    monkeypatch.setattr(http, "_try_rotation", lambda *_a, **_kw: None)
+
+    cleared: list[str] = []
+    monkeypatch.setattr(http, "clear_cf_cookies", cleared.append)
+
+    def looping_get(*_args, **_kwargs):
+        raise requests.exceptions.TooManyRedirects("Too many redirects")
+
+    monkeypatch.setattr(http.requests, "get", looping_get)
+
+    html = http.html_get_page(
+        "https://annas-archive.gl/search?q=dune",
+        retry=1,
+        allow_bypasser_fallback=False,
+    )
+
+    assert not html
+    assert cleared == []
