@@ -1543,6 +1543,7 @@ How long to keep cached search results before they expire.
 | `PROWLARR_TORRENT_CLIENT` | Choose which torrent client to use | string (choice) | _empty string_ |
 | `ALLDEBRID_API_KEY` | AllDebrid API Key (apiv4) from your AllDebrid account settings | string (secret) | _none_ |
 | `REALDEBRID_API_KEY` | Real-Debrid API Key (Secret Token) from your Real-Debrid account settings | string (secret) | _none_ |
+| `TORBOX_API_KEY` | Torbox API key from your Torbox account settings | string (secret) | _none_ |
 | `QBITTORRENT_URL` | Web UI URL of your qBittorrent instance | string | _none_ |
 | `QBITTORRENT_USERNAME` | qBittorrent Web UI username | string | _none_ |
 | `QBITTORRENT_PASSWORD` | qBittorrent Web UI password | string (secret) | _none_ |
@@ -1594,7 +1595,7 @@ Choose which torrent client to use
 
 - **Type:** string (choice)
 - **Default:** _empty string_
-- **Options:** `""` (None), `alldebrid` (AllDebrid), `qbittorrent` (qBittorrent), `realdebrid` (Real-Debrid), `transmission` (Transmission), `deluge` (Deluge), `rtorrent` (rTorrent)
+- **Options:** `""` (None), `alldebrid` (AllDebrid), `qbittorrent` (qBittorrent), `realdebrid` (Real-Debrid), `torbox` (Torbox), `transmission` (Transmission), `deluge` (Deluge), `rtorrent` (rTorrent)
 
 #### `ALLDEBRID_API_KEY`
 
@@ -1610,6 +1611,15 @@ AllDebrid API Key (apiv4) from your AllDebrid account settings
 **API Key**
 
 Real-Debrid API Key (Secret Token) from your Real-Debrid account settings
+
+- **Type:** string (secret)
+- **Default:** _none_
+
+#### `TORBOX_API_KEY`
+
+**API Key**
+
+Torbox API key from your Torbox account settings
 
 - **Type:** string (secret)
 - **Default:** _none_
@@ -2146,6 +2156,7 @@ Enable Moly.hu as a metadata provider for book searches
 | `DIRECT_DOWNLOAD_ENABLED` | Show Direct Download in release-source lists and allow Direct mode searches. Add your own mirror URLs in the Mirrors tab before using it. | boolean | `false` |
 | `DIRECT_DOWNLOAD_LANGUAGE_FROM_PATH` | When language metadata is missing or unknown, parse the distant path (file path shown in search results) for language tags like [BD FR] or [En]. Also enables local language filtering so lgli files without AA language metadata are not excluded before the distant path can be checked. | boolean | `false` |
 | `AA_DONATOR_KEY` | Enables fast download access on AA. Get this from your donator account page. | string (secret) | _none_ |
+| `TORBOX_DIRECT_DOWNLOAD_ENABLED` | Send Anna's Archive book pages to Torbox first, then download from its CDN. Requires a Torbox API key configured in Download Clients. | boolean | `false` |
 | `FAST_SOURCES_DISPLAY` | Always tried first, no waiting or bypass required. | JSON array | _see UI for defaults_ |
 | `SOURCE_PRIORITY` | Fallback sources, may have waiting. Requires bypasser. Drag to reorder. | JSON array | _see UI for defaults_ |
 | `MAX_RETRY` | Maximum retry attempts for failed downloads. | number | `10` |
@@ -2189,6 +2200,15 @@ Enables fast download access on AA. Get this from your donator account page.
 
 - **Type:** string (secret)
 - **Default:** _none_
+
+#### `TORBOX_DIRECT_DOWNLOAD_ENABLED`
+
+**Use Torbox for Direct Downloads**
+
+Send Anna's Archive book pages to Torbox first, then download from its CDN. Requires a Torbox API key configured in Download Clients.
+
+- **Type:** boolean
+- **Default:** `false`
 
 #### `FAST_SOURCES_DISPLAY`
 
