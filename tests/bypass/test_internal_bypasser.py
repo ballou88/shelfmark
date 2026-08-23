@@ -1,5 +1,7 @@
 import asyncio
+import json
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -488,3 +490,239 @@ def test_run_bypass_in_current_process_bounds_its_wait(monkeypatch):
 
     assert result == "html"
     assert observed["timeout"] == internal_bypasser._IN_PROCESS_BYPASS_TIMEOUT_SECONDS
+
+
+def _write_fake_proc_entry(proc_root, pid: int, pgid: int, argv: list[str]) -> None:
+    """Create a /proc-shaped entry for a fake process."""
+    entry = proc_root / str(pid)
+    entry.mkdir()
+    (entry / "cmdline").write_bytes(b"\0".join(arg.encode() for arg in argv) + b"\0")
+    # pid (comm) state ppid pgrp ... - comm is parenthesised and may contain spaces.
+    (entry / "stat").write_text(f"{pid} (some (odd) name) S 1 {pgid} {pgid} 0 -1 4194304 0 0")
+
+
+def test_cleanup_only_kills_own_and_abandoned_browser_sessions(monkeypatch, tmp_path):
+    """Regression test for issue #1231: the sweep used a container-wide `pkill -f chrome`,
+    so every worker that started a bypass killed the browsers the other workers were
+    still driving. Only our own process group and groups whose leader is gone are ours."""
+    import shelfmark.bypass.internal_bypasser as internal_bypasser
+
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    _write_fake_proc_entry(proc_root, 1000, 1000, ["python", "-m", "shelfmark.bypass"])
+    _write_fake_proc_entry(proc_root, 1001, 1000, ["/usr/bin/chromium", "--headless"])
+    _write_fake_proc_entry(proc_root, 1002, 1000, ["Xvfb", ":99"])
+    # Live sibling session: another worker is solving a challenge with these right now.
+    _write_fake_proc_entry(proc_root, 2000, 2000, ["python", "-m", "shelfmark.bypass"])
+    _write_fake_proc_entry(proc_root, 2001, 2000, ["/usr/bin/chromium", "--headless"])
+    # Abandoned session: its leader (pid 3000) is gone, so its browser really is an orphan.
+    _write_fake_proc_entry(proc_root, 3001, 3000, ["/usr/bin/chromium", "--headless"])
+
+    killed: list[int] = []
+
+    monkeypatch.setattr(internal_bypasser.env, "DOCKERMODE", True)
+    monkeypatch.setattr(internal_bypasser, "_PROC_ROOT", proc_root)
+    monkeypatch.setattr(internal_bypasser.os, "getpid", lambda: 1000)
+    monkeypatch.setattr(internal_bypasser.os, "getpgrp", lambda: 1000)
+    monkeypatch.setattr(internal_bypasser.os, "kill", lambda pid, _sig: killed.append(pid))
+    monkeypatch.setattr(internal_bypasser.time, "sleep", lambda _seconds: None)
+
+    assert internal_bypasser._cleanup_orphan_processes() == 3
+    assert sorted(killed) == [1001, 1002, 3001]
+
+
+def test_cleanup_is_skipped_without_proc(monkeypatch, tmp_path):
+    """Without /proc there is no way to tell sessions apart, so kill nothing."""
+    import shelfmark.bypass.internal_bypasser as internal_bypasser
+
+    monkeypatch.setattr(internal_bypasser.env, "DOCKERMODE", True)
+    monkeypatch.setattr(internal_bypasser, "_PROC_ROOT", tmp_path / "missing")
+    monkeypatch.setattr(
+        internal_bypasser.os, "kill", lambda *_args: pytest.fail("must not kill anything")
+    )
+
+    assert internal_bypasser._cleanup_orphan_processes() == 0
+
+
+class _FakeHelperStdin:
+    """The request pipe: a write is how the helper receives one request."""
+
+    def __init__(self, process):
+        self._process = process
+        self.closed = False
+
+    def write(self, data):
+        self._process.serve(data)
+
+    def flush(self):
+        return None
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeHelperProcess:
+    """Stand-in for the bypass helper subprocess.
+
+    The helper serves one request per line of stdin and answers by writing the result file
+    the request named, so that is what this fakes: a write produces an answer.
+    """
+
+    def __init__(self, *_args, **kwargs):
+        self.kwargs = kwargs
+        self.pid = 4242
+        self.returncode = None
+        self.answers = True
+        self.killed = False
+        self.waited = False
+        self.stdin = _FakeHelperStdin(self)
+        self.requests: list[dict] = []
+
+    def serve(self, payload):
+        request = json.loads(payload)
+        self.requests.append(request)
+        if not self.answers:
+            return
+        result = {"ok": True, "html": "<html>solved</html>", "cookies": {}, "user_agents": {}}
+        Path(request["result_path"]).write_text(json.dumps(result), encoding="utf-8")
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+
+    def wait(self, timeout=None):
+        self.waited = True
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+
+def _patch_helper_subprocess(monkeypatch, internal_bypasser, process, killed_groups):
+    monkeypatch.setattr(internal_bypasser.subprocess, "Popen", lambda *a, **kw: process(*a, **kw))
+    monkeypatch.setattr(internal_bypasser.network, "get_dns_config", dict)
+    monkeypatch.setattr(
+        internal_bypasser.os, "killpg", lambda pgid, _sig: killed_groups.append(pgid)
+    )
+    # A fresh helper per test: the module-level one is shared, and a process parked by one
+    # test would be handed to the next.
+    helper = internal_bypasser._BypassHelper()
+    monkeypatch.setattr(internal_bypasser._BypassHelper, "_idle_timeout", lambda _self: 0.0)
+    monkeypatch.setattr(internal_bypasser, "_BYPASS_HELPER", helper)
+    return helper
+
+
+def test_helper_runs_in_its_own_session_and_is_torn_down(monkeypatch):
+    """Regression test for issue #1231: the helper's Chrome and Xvfb must belong to the
+    helper's own process group, and the whole group must die with it - otherwise the
+    leftovers break the next worker's browser and can only be cleared by a sweep broad
+    enough to kill a concurrent worker's browser too.
+
+    The helper outlives a single request, so the teardown happens when it is dropped rather
+    than after every solve. Each bypass still closes its own browser, so what survives in
+    between is the process, not a Chrome.
+    """
+    import shelfmark.bypass.internal_bypasser as internal_bypasser
+
+    processes: list[_FakeHelperProcess] = []
+    killed_groups: list[int] = []
+
+    def _make_process(*args, **kwargs):
+        process = _FakeHelperProcess(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    helper = _patch_helper_subprocess(monkeypatch, internal_bypasser, _make_process, killed_groups)
+
+    assert internal_bypasser._get_via_subprocess("https://example.com", 1) == "<html>solved</html>"
+    assert processes[0].kwargs["start_new_session"] is True
+    assert killed_groups == [], "the helper was torn down after a single request"
+
+    helper._discard()
+
+    assert killed_groups == [processes[0].pid]
+
+
+def test_helper_serves_a_second_request_without_respawning(monkeypatch):
+    """The interpreter start and imports are paid once, not per protected request."""
+    import shelfmark.bypass.internal_bypasser as internal_bypasser
+
+    processes: list[_FakeHelperProcess] = []
+    killed_groups: list[int] = []
+
+    def _make_process(*args, **kwargs):
+        process = _FakeHelperProcess(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    _patch_helper_subprocess(monkeypatch, internal_bypasser, _make_process, killed_groups)
+
+    internal_bypasser._get_via_subprocess("https://example.com/one", 1)
+    internal_bypasser._get_via_subprocess("https://example.com/two", 1)
+
+    assert len(processes) == 1
+    assert [request["url"] for request in processes[0].requests] == [
+        "https://example.com/one",
+        "https://example.com/two",
+    ]
+
+
+def test_helper_timeout_kills_the_whole_session(monkeypatch):
+    """A timed-out solve must not leave a live browser behind for the next worker."""
+    import shelfmark.bypass.internal_bypasser as internal_bypasser
+
+    processes: list[_FakeHelperProcess] = []
+    killed_groups: list[int] = []
+
+    def _make_process(*args, **kwargs):
+        process = _FakeHelperProcess(*args, **kwargs)
+        process.answers = False  # accepts the request, never writes a result
+        processes.append(process)
+        return process
+
+    _patch_helper_subprocess(monkeypatch, internal_bypasser, _make_process, killed_groups)
+    monkeypatch.setattr(internal_bypasser, "_BYPASS_SUBPROCESS_TIMEOUT_SECONDS", 0.1)
+
+    with pytest.raises(TimeoutError):
+        internal_bypasser._get_via_subprocess("https://example.com", 1)
+
+    assert killed_groups == [processes[0].pid]
+    assert processes[0].killed is True
+
+
+def test_helper_takes_the_browser_down_when_its_parent_dies(monkeypatch):
+    """Cleanup only reclaims process groups whose leader is gone (#1231), so an orphaned
+    helper must not sit there holding a browser no later bypass is allowed to touch."""
+    import shelfmark.bypass.internal_bypasser as internal_bypasser
+
+    terminated: list[str] = []
+
+    monkeypatch.setattr(internal_bypasser.os, "getppid", lambda: 1)
+    monkeypatch.setattr(
+        internal_bypasser, "_terminate_own_session", lambda: terminated.append("terminated")
+    )
+    monkeypatch.setattr(
+        internal_bypasser.time, "sleep", lambda _seconds: pytest.fail("should not wait")
+    )
+
+    internal_bypasser._watch_parent_process(999, interval=0.0)
+
+    assert terminated == ["terminated"]
+
+
+def test_helper_watchdog_waits_while_its_parent_is_alive(monkeypatch):
+    """The watchdog must only fire on a changed ppid, not on every poll."""
+    import shelfmark.bypass.internal_bypasser as internal_bypasser
+
+    ppids = iter([999, 999, 1])
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(internal_bypasser.os, "getppid", lambda: next(ppids))
+    monkeypatch.setattr(internal_bypasser, "_terminate_own_session", lambda: None)
+    monkeypatch.setattr(internal_bypasser.time, "sleep", sleeps.append)
+
+    internal_bypasser._watch_parent_process(999, interval=0.5)
+
+    assert sleeps == [0.5, 0.5]

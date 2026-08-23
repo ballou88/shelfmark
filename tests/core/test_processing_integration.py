@@ -748,6 +748,94 @@ def test_archive_extraction_organize_multifile_assigns_part_numbers(tmp_path):
     assert files[1].name == "Archive Audio - 02.mp3"
 
 
+@pytest.mark.parametrize(
+    ("organization_mode", "grouped"),
+    [("rename_and_group", True), ("rename", False)],
+)
+def test_archive_extraction_groups_chapters_under_the_archive_stem(
+    tmp_path, organization_mode, grouped
+):
+    """An extracted multi-chapter archive groups into `Book/`, never `Book.zip/`."""
+    from shelfmark.download.postprocess.router import (
+        post_process_download as _post_process_download,
+    )
+
+    staging = tmp_path / "staging"
+    ingest = tmp_path / "ingest"
+    staging.mkdir()
+    ingest.mkdir()
+
+    archive_path = staging / "Book.zip"
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        zf.writestr("Part 1.mp3", "audio1")
+        zf.writestr("Part 2.mp3", "audio2")
+
+    task = DownloadTask(
+        task_id=f"direct-archive-audio-{organization_mode}",
+        source="direct_download",
+        title="Archive Audio",
+        author="Tester",
+        format="mp3",
+        content_type="audiobook",
+        search_mode=SearchMode.DIRECT,
+    )
+
+    with (
+        patch("shelfmark.core.config.config") as mock_config,
+        patch("shelfmark.config.env.TMP_DIR", staging),
+    ):
+        mock_config.get = _build_config(ingest, organization=organization_mode)
+        mock_config.CUSTOM_SCRIPT = None
+        _sync_config(mock_config, mock_config)
+
+        result = _post_process_download(archive_path, task, Event(), lambda *_args: None)
+
+    transfer_dir = ingest / "Book" if grouped else ingest
+    assert result is not None
+    assert Path(result).parent == transfer_dir
+    assert sorted(path.name for path in transfer_dir.glob("*.mp3")) == ["Part 1.mp3", "Part 2.mp3"]
+    assert bool(list(ingest.glob("*.mp3"))) is not grouped
+    # The suffix is packaging, not part of the release name.
+    assert not (ingest / "Book.zip").exists()
+
+
+def test_usenet_audiobook_multifile_preserves_source_folder(tmp_path):
+    from shelfmark.download.postprocess.router import (
+        post_process_download as _post_process_download,
+    )
+
+    source_dir = tmp_path / "downloads" / "Usenet Audiobook"
+    source_dir.mkdir(parents=True)
+    for part in (1, 2):
+        (source_dir / f"Part {part}.mp3").write_text(f"audio{part}")
+
+    ingest = tmp_path / "ingest"
+    ingest.mkdir()
+    task = DownloadTask(
+        task_id="usenet-audio-grouped",
+        source="prowlarr",
+        title="Usenet Audio",
+        author="Tester",
+        format="mp3",
+        content_type="audiobook",
+        search_mode=SearchMode.UNIVERSAL,
+    )
+
+    with patch("shelfmark.core.config.config") as mock_config:
+        mock_config.get = _build_config(ingest, organization="rename_and_group")
+        mock_config.CUSTOM_SCRIPT = None
+
+        result = _post_process_download(source_dir, task, Event(), lambda *_args: None)
+
+    grouped_dir = ingest / "Usenet Audiobook"
+    assert result is not None
+    assert Path(result).parent == grouped_dir
+    assert sorted(path.name for path in grouped_dir.glob("*.mp3")) == [
+        "Part 1.mp3",
+        "Part 2.mp3",
+    ]
+
+
 def test_archive_extraction_organize_multifile_can_use_original_name(tmp_path):
     from shelfmark.download.postprocess.router import (
         post_process_download as _post_process_download,

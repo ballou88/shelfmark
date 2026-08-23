@@ -17,6 +17,7 @@ from shelfmark.core.naming import (
     sanitize_filename,
 )
 from shelfmark.core.utils import is_audiobook as check_audiobook
+from shelfmark.download.archive import is_archive
 from shelfmark.download.fs import (
     atomic_copy,
     atomic_hardlink,
@@ -160,6 +161,24 @@ def _transfer_single_file(
     return atomic_move(source_path, dest_path, max_attempts=max_attempts), "move"
 
 
+def _group_folder_name(source_root: Path | None) -> str:
+    """Name the folder a grouped multi-file audiobook is transferred into.
+
+    A directory names the group directly. A file cannot hold several book files
+    on its own, so a non-directory source that produced more than one means
+    `collect_staged_files` extracted an archive: the stem is the release name and
+    the suffix is packaging, which is why `Book.zip` groups into `Book/` rather
+    than `Book.zip/` or, worse, not at all.
+    """
+    if source_root is None:
+        return ""
+    if run_blocking_io(source_root.is_dir):
+        return sanitize_filename(source_root.name)
+    if is_archive(source_root):
+        return sanitize_filename(source_root.stem)
+    return ""
+
+
 def transfer_book_files(
     book_files: list[Path],
     destination: Path,
@@ -169,6 +188,7 @@ def transfer_book_files(
     is_torrent: bool,
     preserve_source: bool = False,
     organization_mode: str | None = None,
+    source_root: Path | None = None,
 ) -> tuple[list[Path], str | None, dict[str, int]]:
     """Transfer discovered book files into their final destination layout."""
     if not book_files:
@@ -238,6 +258,13 @@ def transfer_book_files(
 
         return final_paths, None, op_counts
 
+    transfer_destination = destination
+    if is_audiobook and len(book_files) > 1 and organization_mode == "rename_and_group":
+        source_folder = _group_folder_name(source_root)
+        if source_folder:
+            transfer_destination = destination / source_folder
+            run_blocking_io(transfer_destination.mkdir, parents=True, exist_ok=True)
+
     for book_file in book_files:
         if len(book_files) == 1 and organization_mode != "none":
             if not task.format:
@@ -256,7 +283,7 @@ def transfer_book_files(
         else:
             filename = book_file.name
 
-        dest_path = destination / filename
+        dest_path = transfer_destination / filename
         final_path, op = _transfer_single_file(
             book_file,
             dest_path,

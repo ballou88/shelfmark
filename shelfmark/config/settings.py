@@ -766,7 +766,10 @@ def _on_save_downloads(values: dict[str, Any]) -> dict[str, Any]:
             }
 
     # Audiobooks are always folder output.
-    if effective.get("FILE_ORGANIZATION_AUDIOBOOK", "rename") == "rename":
+    if effective.get("FILE_ORGANIZATION_AUDIOBOOK", "rename") in {
+        "rename",
+        "rename_and_group",
+    }:
         template = effective.get("TEMPLATE_AUDIOBOOK_RENAME", "")
         if _contains_path_separators(template):
             return {
@@ -1294,6 +1297,11 @@ def download_settings() -> list[SettingsField]:
                     "label": "Rename and Organize",
                     "description": "Create folders and rename files using a template. Recommended for Audiobookshelf. Do not use with ingest folders.",
                 },
+                {
+                    "value": "rename_and_group",
+                    "label": "Rename and Group",
+                    "description": "Rename single-file downloads; keep multi-file downloads grouped in their source folder. Do not use with ingest folders.",
+                },
             ],
             default="rename",
             universal_only=True,
@@ -1312,7 +1320,10 @@ def download_settings() -> list[SettingsField]:
             ),
             default="{Author} - {Title}",
             placeholder="{Author} - {Title}{ - Part }{PartNumber}",
-            show_when={"field": "FILE_ORGANIZATION_AUDIOBOOK", "value": "rename"},
+            show_when={
+                "field": "FILE_ORGANIZATION_AUDIOBOOK",
+                "value": ["rename", "rename_and_group"],
+            },
             universal_only=True,
         ),
         # Organize mode template - folders allowed
@@ -1663,6 +1674,19 @@ def cloudflare_bypass_settings() -> list[SettingsField]:
             max_value=300000,
             requires_restart=True,
             show_when={"field": "USING_EXTERNAL_BYPASSER", "value": True},
+        ),
+        NumberField(
+            key="BYPASS_BROWSER_IDLE_TIMEOUT",
+            label="Bypasser Idle Timeout (seconds)",
+            description=(
+                "How long the bypass helper process may sit unused before it is shut down. "
+                "Higher keeps more searches fast, lower frees memory sooner."
+            ),
+            default=180,
+            min_value=30,
+            max_value=3600,
+            requires_restart=True,
+            show_when={"field": "USING_EXTERNAL_BYPASSER", "value": False},
         ),
     ]
 
