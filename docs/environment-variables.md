@@ -247,7 +247,7 @@ Seconds since the last WireGuard handshake before the healthcheck bounces the tu
 | `CALIBRE_WEB_URL` | Adds a navigation button to your book library (Calibre-Web Automated, Grimmory, etc). | string | _none_ |
 | `AUDIOBOOK_LIBRARY_URL` | Adds a separate navigation button for your audiobook library (Audiobookshelf, Plex, etc). When both URLs are set, icons are shown instead of text. | string | _none_ |
 | `SUPPORTED_FORMATS` | Book formats to include in search results. ZIP/RAR archives are extracted automatically and book files are used if found. | string (comma-separated) | `epub,mobi,azw3,fb2,djvu,cbz,cbr` |
-| `SUPPORTED_AUDIOBOOK_FORMATS` | Audiobook formats to include in search results. ZIP/RAR archives are extracted automatically and audiobook files are used if found. | string (comma-separated) | `m4b,mp3,m4a,flac,ogg,wma,aac,wav,opus,zip,rar` |
+| `SUPPORTED_AUDIOBOOK_FORMATS` | Audiobook formats to include in search results. ZIP/RAR archives are extracted automatically and audiobook files are used if found. | string (comma-separated) | `m4b,mp3,m4a,mp4,flac,ogg,wma,aac,wav,opus,zip,rar` |
 | `BOOK_LANGUAGE` | Default language filter for searches. | string (comma-separated) | `en` |
 
 <details>
@@ -296,16 +296,7 @@ Book formats to include in search results. ZIP/RAR archives are extracted automa
 Audiobook formats to include in search results. ZIP/RAR archives are extracted automatically and audiobook files are used if found.
 
 - **Type:** string (comma-separated)
-- **Default:** `m4b,mp3,m4a,flac,ogg,wma,aac,wav,opus,zip,rar`
-
-#### `BOOK_LANGUAGE`
-
-**Default Book Languages**
-
-Default language filter for searches.
-
-- **Type:** string (comma-separated)
-- **Default:** `en`
+- **Default:** `m4b,mp3,m4a,mp4,flac,ogg,wma,aac,wav,opus,zip,rar`
 
 </details>
 
@@ -314,6 +305,7 @@ Default language filter for searches.
 | Variable | Description | Type | Default |
 |----------|-------------|------|---------|
 | `SEARCH_MODE` | How you want to search for and download books. | string (choice) | `universal` |
+| `BOOK_LANGUAGE` | Default language filter for searches. Users can override this for their own account. | string (comma-separated) | `en` |
 | `AA_DEFAULT_SORT` | Default sort order for search results. | string (choice) | `relevance` |
 | `SHOW_RELEASE_SOURCE_LINKS` | Show clickable release-source links in release and details modals. Metadata provider links stay enabled. | boolean | `true` |
 | `SHOW_COMBINED_SELECTOR` | Show the option to search for and download both a book and audiobook together. | boolean | `true` |
@@ -336,6 +328,15 @@ How you want to search for and download books.
 - **Type:** string (choice)
 - **Default:** `universal`
 - **Options:** `direct` (Direct), `universal` (Universal)
+
+#### `BOOK_LANGUAGE`
+
+**Default Book Languages**
+
+Default language filter for searches. Users can override this for their own account.
+
+- **Type:** string (comma-separated)
+- **Default:** `en`
 
 #### `AA_DEFAULT_SORT`
 
@@ -749,6 +750,7 @@ Automatically open the downloads sidebar when a new download is queued.
 Automatically download completed files to your browser for the selected content types.
 
 - **Type:** string (comma-separated)
+  
 - **Default:** _empty list_
 
 #### `MAX_CONCURRENT_DOWNLOADS`
@@ -1313,8 +1315,9 @@ Apply per-indexer seed time and ratio preferences from Prowlarr when sending tor
 | Variable | Description | Type | Default |
 |----------|-------------|------|---------|
 | `NEWZNAB_ENABLED` | Enable searching for books via a Newznab-compatible indexer | boolean | `false` |
-| `NEWZNAB_URL` | Base URL of your Newznab indexer or aggregator | string | _none_ |
-| `NEWZNAB_API_KEY` | Your Newznab API key (leave blank if not required) | string (secret) | _none_ |
+| `NEWZNAB_INDEXERS` | Named Newznab connections. Each row accepts `name`, `url`, and `api_key`. | JSON array | `[]` |
+| `NEWZNAB_URL` | Legacy single-indexer URL, used when `NEWZNAB_INDEXERS` is empty | string | _none_ |
+| `NEWZNAB_API_KEY` | Legacy single-indexer API key | string (secret) | _none_ |
 | `NEWZNAB_EBOOK_CATEGORIES` | Newznab category IDs searched for ebooks. Most indexers use the standard 7000, but some use custom IDs. Leave empty to use 7000. | string (comma-separated) | `7000` |
 | `NEWZNAB_AUDIOBOOK_CATEGORIES` | Newznab category IDs searched for audiobooks. Most indexers use the standard 3030, but some use custom IDs. Leave empty to use 3030. | string (comma-separated) | `3030` |
 | `NEWZNAB_AUTO_EXPAND` | Automatically retry search without category filtering if no results are found | boolean | `false` |
@@ -1331,21 +1334,36 @@ Enable searching for books via a Newznab-compatible indexer
 - **Type:** boolean
 - **Default:** `false`
 
+#### `NEWZNAB_INDEXERS`
+
+**Named Indexers**
+
+Configure multiple named Newznab-compatible indexers. The name is shown beside each search result. For environment-based configuration, provide a JSON array:
+
+```json
+[
+  {"name":"NZBGeek","url":"https://api.nzbgeek.info","api_key":"..."},
+  {"name":"DrunkenSlug","url":"https://drunkenslug.com","api_key":"..."}
+]
+```
+
+- **Type:** JSON array
+- **Default:** `[]`
+
 #### `NEWZNAB_URL`
 
-**Newznab URL**
+**Legacy Newznab URL**
 
-Base URL of your Newznab indexer or aggregator
+Single-indexer fallback used only when `NEWZNAB_INDEXERS` is empty.
 
 - **Type:** string
 - **Default:** _none_
-- **Required:** Yes
 
 #### `NEWZNAB_API_KEY`
 
-**API Key**
+**Legacy API Key**
 
-Your Newznab API key (leave blank if not required)
+API key for the legacy Newznab URL.
 
 - **Type:** string (secret)
 - **Default:** _none_

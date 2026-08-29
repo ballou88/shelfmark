@@ -508,6 +508,72 @@ class TestAdminUserUpdateEndpoint:
         settings = user_db.get_user_settings(user["id"])
         assert settings["DESTINATION_AUDIOBOOK"] == "/audiobooks/alice"
 
+    def test_update_user_settings_normalizes_book_languages(self, admin_client, user_db):
+        user = user_db.create_user(username="alice")
+
+        resp = admin_client.put(
+            f"/api/admin/users/{user['id']}",
+            json={"settings": {"BOOK_LANGUAGE": ["German", "de", " en "]}},
+        )
+        assert resp.status_code == 200
+        settings = user_db.get_user_settings(user["id"])
+        assert settings["BOOK_LANGUAGE"] == ["de", "en"]
+
+    def test_update_user_settings_rejects_unknown_book_language(self, admin_client, user_db):
+        user = user_db.create_user(username="alice")
+
+        resp = admin_client.put(
+            f"/api/admin/users/{user['id']}",
+            json={"settings": {"BOOK_LANGUAGE": ["de", "klingon"]}},
+        )
+        assert resp.status_code == 400
+        assert resp.json["error"] == "Invalid settings payload"
+        assert any(
+            "BOOK_LANGUAGE contains an unsupported language: klingon" in msg
+            for msg in resp.json["details"]
+        )
+        assert user_db.get_user_settings(user["id"]) == {}
+
+    def test_update_user_settings_skips_blank_book_languages(self, admin_client, user_db):
+        """A trailing comma or a blank slot means "nothing there", not an unknown language."""
+        user = user_db.create_user(username="alice")
+
+        resp = admin_client.put(
+            f"/api/admin/users/{user['id']}",
+            json={"settings": {"BOOK_LANGUAGE": "en,"}},
+        )
+        assert resp.status_code == 200
+        assert user_db.get_user_settings(user["id"])["BOOK_LANGUAGE"] == ["en"]
+
+    def test_update_user_settings_normalizes_every_validated_search_key(
+        self, admin_client, user_db
+    ):
+        """Keys the search validator recognises keep their normalized value.
+
+        These three were validated but then stored raw, because the write-back was
+        gated on a hand-maintained subset of the validated keys. A padded provider
+        name was accepted and then persisted with its padding, so every later lookup
+        of it failed.
+        """
+        user = user_db.create_user(username="alice")
+
+        resp = admin_client.put(
+            f"/api/admin/users/{user['id']}",
+            json={
+                "settings": {
+                    "METADATA_PROVIDER_COMBINED": "  openlibrary  ",
+                    "SHOW_COMBINED_SELECTOR": "yes",
+                    "FORCE_COMBINED_SEARCH": "",
+                }
+            },
+        )
+        assert resp.status_code == 200
+
+        settings = user_db.get_user_settings(user["id"])
+        assert settings["METADATA_PROVIDER_COMBINED"] == "openlibrary"
+        assert settings["SHOW_COMBINED_SELECTOR"] is True
+        assert settings["FORCE_COMBINED_SEARCH"] is False
+
     def test_update_user_settings_accepts_notification_overrides(self, admin_client, user_db):
         user = user_db.create_user(username="alice")
 
@@ -1266,6 +1332,7 @@ class TestAdminSearchPreferences:
         assert data["tab"] == "search_mode"
         assert data["keys"] == [
             "SEARCH_MODE",
+            "BOOK_LANGUAGE",
             "SHOW_COMBINED_SELECTOR",
             "FORCE_COMBINED_SEARCH",
             "METADATA_PROVIDER",
@@ -1294,6 +1361,21 @@ class TestAdminSearchPreferences:
         assert data["effective"]["DEFAULT_RELEASE_SOURCE"]["value"] == "prowlarr"
         assert data["effective"]["DEFAULT_RELEASE_SOURCE_AUDIOBOOK"]["source"] == "user_override"
         assert data["effective"]["DEFAULT_RELEASE_SOURCE_AUDIOBOOK"]["value"] == "audiobookbay"
+
+    def test_reports_book_language_override(self, admin_client, user_db):
+        user = user_db.create_user(username="alice")
+        user_db.set_user_settings(user["id"], {"BOOK_LANGUAGE": ["de", "en"]})
+
+        resp = admin_client.get(f"/api/admin/users/{user['id']}/search-preferences")
+        assert resp.status_code == 200
+
+        data = resp.json
+        assert data["userOverrides"]["BOOK_LANGUAGE"] == ["de", "en"]
+        assert data["effective"]["BOOK_LANGUAGE"] == {
+            "value": ["de", "en"],
+            "source": "user_override",
+        }
+        assert data["globalValues"]["BOOK_LANGUAGE"] == ["en"]
 
     def test_returns_404_for_unknown_user(self, admin_client):
         resp = admin_client.get("/api/admin/users/9999/search-preferences")
